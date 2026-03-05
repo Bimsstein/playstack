@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum GameStatus {
+  WANT_TO_PLAY
+  PLAYING
+  DONE
+}
+
+enum GameSource {
+  PLAYSTATION
+  STEAM
+  NINTENDO
+}
+
+model Game {
+  id                String     @id @default(cuid())
+  source            GameSource @default(PLAYSTATION)
+  psnTitleId        String?    @unique
+  steamAppId        Int?       @unique
+  nintendoGameId    String?    @unique
+  title             String
+  platform          String?
+  coverUrl          String?
+  currentPrice      String?
+  lowestPrice30Days String?
+  psnStoreRating    Float?
+  wantBaselinePrice Float?
+  priceAlertActive  Boolean    @default(false)
+  lastAlertPrice    Float?
+  lastAlertAt       DateTime?
+  status            GameStatus @default(WANT_TO_PLAY)
+  rating            Int?
+  trophyCompletion  Int?
+  earnedTrophies    Int?
+  totalTrophies     Int?
+  storyPlusHours    Int?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  notifications     Notification[]
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  gameId    String?
+  title     String
+  message   String
+  createdAt DateTime @default(now())
+  readAt    DateTime?
+  game      Game?    @relation(fields: [gameId], references: [id], onDelete: SetNull)
+
+  @@index([readAt, createdAt])
+  @@index([gameId])
+}
+
+model PsnLibraryTitle {
+  id               String   @id @default(cuid())
+  psnTitleId       String   @unique
+  title            String
+  platform         String?
+  coverUrl         String?
+  trophyCompletion Int?
+  earnedTrophies   Int?
+  totalTrophies    Int?
+  lastSyncedAt     DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model SteamLibraryTitle {
+  id               String   @id @default(cuid())
+  steamAppId       Int      @unique
+  title            String
+  platform         String?
+  coverUrl         String?
+  playtimeHours    Int?
+  trophyCompletion Int?
+  earnedTrophies   Int?
+  totalTrophies    Int?
+  lastSyncedAt     DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model NintendoLibraryTitle {
+  id                String   @id @default(cuid())
+  nintendoGameId    String   @unique
+  title             String
+  platform          String?
+  coverUrl          String?
+  currentPrice      String?
+  lowestPrice30Days String?
+  releaseDate       String?
+  trophyCompletion  Int?
+  earnedTrophies    Int?
+  totalTrophies     Int?
+  lastSyncedAt      DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
