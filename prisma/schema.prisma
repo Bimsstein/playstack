@@ -22,10 +22,12 @@ enum GameSource {
 
 model Game {
   id                String     @id @default(cuid())
+  userId            String?
+  user              User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
   source            GameSource @default(PLAYSTATION)
-  psnTitleId        String?    @unique
-  steamAppId        Int?       @unique
-  nintendoGameId    String?    @unique
+  psnTitleId        String?
+  steamAppId        Int?
+  nintendoGameId    String?
   title             String
   platform          String?
   coverUrl          String?
@@ -46,10 +48,17 @@ model Game {
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
   notifications     Notification[]
+
+  @@index([userId, status, updatedAt])
+  @@unique([userId, psnTitleId])
+  @@unique([userId, steamAppId])
+  @@unique([userId, nintendoGameId])
 }
 
 model Notification {
   id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   gameId    String?
   title     String
   message   String
@@ -57,7 +66,7 @@ model Notification {
   readAt    DateTime?
   game      Game?    @relation(fields: [gameId], references: [id], onDelete: SetNull)
 
-  @@index([readAt, createdAt])
+  @@index([userId, readAt, createdAt])
   @@index([gameId])
 }
 
@@ -70,7 +79,9 @@ model AppSetting {
 
 model PsnLibraryTitle {
   id               String   @id @default(cuid())
-  psnTitleId       String   @unique
+  userId           String?
+  user             User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  psnTitleId       String
   title            String
   platform         String?
   coverUrl         String?
@@ -80,11 +91,16 @@ model PsnLibraryTitle {
   lastSyncedAt     DateTime @default(now())
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@unique([userId, psnTitleId])
+  @@index([userId, updatedAt])
 }
 
 model SteamLibraryTitle {
   id               String   @id @default(cuid())
-  steamAppId       Int      @unique
+  userId           String?
+  user             User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  steamAppId       Int
   title            String
   platform         String?
   coverUrl         String?
@@ -95,11 +111,16 @@ model SteamLibraryTitle {
   lastSyncedAt     DateTime @default(now())
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@unique([userId, steamAppId])
+  @@index([userId, updatedAt])
 }
 
 model NintendoLibraryTitle {
   id                String   @id @default(cuid())
-  nintendoGameId    String   @unique
+  userId            String?
+  user              User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nintendoGameId    String
   title             String
   platform          String?
   coverUrl          String?
@@ -112,4 +133,33 @@ model NintendoLibraryTitle {
   lastSyncedAt      DateTime @default(now())
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
+  @@unique([userId, nintendoGameId])
+  @@index([userId, updatedAt])
+}
+
+model User {
+  id           String                @id @default(cuid())
+  email        String                @unique
+  passwordHash String
+  displayName  String
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  sessions     Session[]
+  games        Game[]
+  notifications Notification[]
+  psnLibrary   PsnLibraryTitle[]
+  steamLibrary SteamLibraryTitle[]
+  nintendoLibrary NintendoLibraryTitle[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId, expiresAt])
 }

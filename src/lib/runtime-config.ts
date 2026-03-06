@@ -21,14 +21,17 @@ const DEFAULTS: RuntimeConfig = {
   RAWG_API_KEY: ""
 };
 
-export async function getRuntimeConfig(): Promise<RuntimeConfig> {
+export async function getRuntimeConfig(userId?: string): Promise<RuntimeConfig> {
+  const scopedKeys = userId ? APP_SETTING_KEYS.map((k) => `${userId}:${k}`) : [];
+  const keysToRead = [...APP_SETTING_KEYS, ...scopedKeys];
   const rows = await prisma.appSetting.findMany({
-    where: { key: { in: [...APP_SETTING_KEYS] } }
+    where: { key: { in: keysToRead } }
   });
   const dbMap = new Map(rows.map((row) => [row.key, row.value]));
 
   const read = (key: AppSettingKey) => {
-    const dbVal = dbMap.get(key)?.trim();
+    const scopedKey = userId ? `${userId}:${key}` : "";
+    const dbVal = (scopedKey ? dbMap.get(scopedKey) : undefined)?.trim() || dbMap.get(key)?.trim();
     if (dbVal) return dbVal;
     const envVal = process.env[key]?.trim();
     if (envVal) return envVal;
@@ -44,4 +47,3 @@ export async function getRuntimeConfig(): Promise<RuntimeConfig> {
     RAWG_API_KEY: read("RAWG_API_KEY")
   };
 }
-

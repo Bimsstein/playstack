@@ -3,8 +3,8 @@ import { GameStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getRuntimeConfig } from "@/lib/runtime-config";
 
-const getRawgApiKey = async () => {
-  const cfg = await getRuntimeConfig();
+const getRawgApiKey = async (userId: string) => {
+  const cfg = await getRuntimeConfig(userId);
   return cfg.RAWG_API_KEY || "";
 };
 
@@ -153,11 +153,11 @@ export async function searchNintendoCatalog(query: string): Promise<NintendoTitl
   return searchNintendoEshop(query);
 }
 
-export async function searchNintendoLegacyCatalog(query: string): Promise<NintendoTitleCandidate[]> {
+export async function searchNintendoLegacyCatalog(userId: string, query: string): Promise<NintendoTitleCandidate[]> {
   const q = query.trim();
   if (!q) return [];
 
-  const key = await getRawgApiKey();
+  const key = await getRawgApiKey(userId);
   if (!key) return [];
 
   const url = `https://api.rawg.io/api/games?key=${encodeURIComponent(key)}&search=${encodeURIComponent(
@@ -202,8 +202,9 @@ export async function searchNintendoLegacyCatalog(query: string): Promise<Ninten
     .slice(0, 40);
 }
 
-export async function getNintendoLibraryTitles(): Promise<NintendoTitleCandidate[]> {
+export async function getNintendoLibraryTitles(userId: string): Promise<NintendoTitleCandidate[]> {
   const rows = await prisma.nintendoLibraryTitle.findMany({
+    where: { userId },
     orderBy: [{ updatedAt: "desc" }, { title: "asc" }]
   });
 
@@ -222,11 +223,15 @@ export async function getNintendoLibraryTitles(): Promise<NintendoTitleCandidate
   }));
 }
 
-export async function syncNintendoData() {
+export async function syncNintendoData(userId: string) {
   // Best-effort sync: keep Nintendo library cache aligned with tracked Nintendo titles
   // and refresh eShop pricing for Switch/Switch 2 titles.
   const tracked = await prisma.game.findMany({
-    where: { source: "NINTENDO", nintendoGameId: { not: null } },
+    where: {
+      userId,
+      source: "NINTENDO",
+      nintendoGameId: { not: null }
+    },
     select: {
       nintendoGameId: true,
       title: true,
@@ -263,8 +268,9 @@ export async function syncNintendoData() {
     }
 
     await prisma.nintendoLibraryTitle.upsert({
-      where: { nintendoGameId: game.nintendoGameId },
+      where: { userId_nintendoGameId: { userId, nintendoGameId: game.nintendoGameId } },
       update: {
+        userId,
         title: game.title,
         platform: game.platform,
         coverUrl: game.coverUrl,
@@ -277,6 +283,7 @@ export async function syncNintendoData() {
       },
       create: {
         nintendoGameId: game.nintendoGameId,
+        userId,
         title: game.title,
         platform: game.platform,
         coverUrl: game.coverUrl,
@@ -290,7 +297,7 @@ export async function syncNintendoData() {
     });
 
     await prisma.game.updateMany({
-      where: { nintendoGameId: game.nintendoGameId },
+      where: { userId, nintendoGameId: game.nintendoGameId },
       data: {
         currentPrice: currentPrice ?? null,
         lowestPrice30Days: lowestPrice30Days ?? null,
@@ -307,9 +314,10 @@ export async function syncNintendoData() {
   };
 }
 
-export async function syncCompletedNintendoGamesToDone() {
+export async function syncCompletedNintendoGamesToDone(userId: string) {
   const rows = await prisma.game.findMany({
     where: {
+      userId,
       source: "NINTENDO",
       trophyCompletion: { gte: 100 },
       status: { not: GameStatus.DONE }

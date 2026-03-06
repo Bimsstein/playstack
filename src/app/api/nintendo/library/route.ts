@@ -1,10 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+import { getUserFromRequest } from "@/lib/auth";
 import { getNintendoLibraryTitles } from "@/lib/nintendo";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const user = await getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
-    const titles = await getNintendoLibraryTitles();
+    const titles = await getNintendoLibraryTitles(user.id);
     return NextResponse.json({ titles });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to read Nintendo library";

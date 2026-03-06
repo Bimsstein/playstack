@@ -13,9 +13,9 @@ function parsePrice(value?: string | null): number | null {
   return num;
 }
 
-export async function syncLowestPriceHistoryForGame(gameId: string) {
-  const game = await prisma.game.findUnique({
-    where: { id: gameId },
+export async function syncLowestPriceHistoryForGame(userId: string, gameId: string) {
+  const game = await prisma.game.findFirst({
+    where: { id: gameId, userId },
     select: { id: true, currentPrice: true, lowestPrice30Days: true }
   });
   if (!game) return;
@@ -33,9 +33,9 @@ export async function syncLowestPriceHistoryForGame(gameId: string) {
   });
 }
 
-export async function syncLowestPriceHistoryForAllGames() {
+export async function syncLowestPriceHistoryForAllGames(userId: string) {
   const rows = await prisma.game.findMany({
-    where: { currentPrice: { not: null } },
+    where: { userId, currentPrice: { not: null } },
     select: { id: true, currentPrice: true, lowestPrice30Days: true }
   });
 
@@ -52,9 +52,9 @@ export async function syncLowestPriceHistoryForAllGames() {
   }
 }
 
-export async function evaluateWantPriceAlerts() {
+export async function evaluateWantPriceAlerts(userId: string) {
   const wantGames = await prisma.game.findMany({
-    where: { status: GameStatus.WANT_TO_PLAY },
+    where: { userId, status: GameStatus.WANT_TO_PLAY },
     select: {
       id: true,
       title: true,
@@ -91,6 +91,7 @@ export async function evaluateWantPriceAlerts() {
       if (shouldNotify) {
         await prisma.notification.create({
           data: {
+            userId,
             gameId: game.id,
             title: "Price Drop",
             message: `${game.title} dropped to €${current.toFixed(2).replace(".", ",")} (baseline: €${baseline.toFixed(2).replace(".", ",")}).`
@@ -120,9 +121,9 @@ export async function evaluateWantPriceAlerts() {
   }
 }
 
-export async function syncWantBaselineForGame(gameId: string) {
-  const game = await prisma.game.findUnique({
-    where: { id: gameId },
+export async function syncWantBaselineForGame(userId: string, gameId: string) {
+  const game = await prisma.game.findFirst({
+    where: { id: gameId, userId },
     select: {
       id: true,
       status: true,

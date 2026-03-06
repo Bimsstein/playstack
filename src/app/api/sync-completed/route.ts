@@ -1,15 +1,18 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+import { getUserFromRequest } from "@/lib/auth";
 import { syncCompletedNintendoGamesToDone } from "@/lib/nintendo";
 import { syncCompletedPsnGamesToDone } from "@/lib/psn";
-import { syncCompletedSteamGamesToDone } from "@/lib/steam";
+import { syncCompletedSteamGamesToDoneForUser } from "@/lib/steam";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const user = await getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const [psn, steam, nintendo] = await Promise.all([
-      syncCompletedPsnGamesToDone(),
-      syncCompletedSteamGamesToDone(),
-      syncCompletedNintendoGamesToDone()
+      syncCompletedPsnGamesToDone(user.id),
+      syncCompletedSteamGamesToDoneForUser(user.id),
+      syncCompletedNintendoGamesToDone(user.id)
     ]);
     return NextResponse.json({
       completedTitles: (psn.completedTitles ?? 0) + (steam.completedTitles ?? 0) + (nintendo.completedTitles ?? 0),

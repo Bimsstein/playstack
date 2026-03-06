@@ -3,8 +3,8 @@ import { GameStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getRuntimeConfig } from "@/lib/runtime-config";
 
-async function getSteamConfig() {
-  const cfg = await getRuntimeConfig();
+async function getSteamConfig(userId: string) {
+  const cfg = await getRuntimeConfig(userId);
   return {
     apiKey: cfg.STEAM_API_KEY,
     steamId: cfg.STEAM_STEAMID,
@@ -162,12 +162,12 @@ async function steamFetch<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function fetchSteamAchievementSnapshot(appId: number): Promise<{
+async function fetchSteamAchievementSnapshot(userId: string, appId: number): Promise<{
   completion?: number;
   earned?: number;
   total?: number;
 }> {
-  const { apiKey: key, steamId } = await getSteamConfig();
+  const { apiKey: key, steamId } = await getSteamConfig(userId);
   const achievementsUrl = `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key=${encodeURIComponent(
     key
   )}&steamid=${encodeURIComponent(steamId)}&appid=${appId}&l=english`;
@@ -183,8 +183,8 @@ async function fetchSteamAchievementSnapshot(appId: number): Promise<{
   };
 }
 
-export async function getSteamConnectionStatus(): Promise<SteamProfileStatus> {
-  const { apiKey: key, steamId, enabled } = await getSteamConfig();
+export async function getSteamConnectionStatus(userId: string): Promise<SteamProfileStatus> {
+  const { apiKey: key, steamId, enabled } = await getSteamConfig(userId);
   if (!enabled) {
     return { enabled: false, connected: false, error: "Missing STEAM_API_KEY or STEAM_STEAMID." };
   }
@@ -224,8 +224,8 @@ export async function getSteamConnectionStatus(): Promise<SteamProfileStatus> {
   }
 }
 
-export async function syncSteamData() {
-  const { apiKey: key, steamId, enabled } = await getSteamConfig();
+export async function syncSteamData(userId: string) {
+  const { apiKey: key, steamId, enabled } = await getSteamConfig(userId);
   if (!enabled) {
     return { enabled: false, syncedCount: 0, updatedTrackedCount: 0 };
   }
@@ -243,8 +243,9 @@ export async function syncSteamData() {
     const playtimeHours = Math.round((game.playtime_forever ?? 0) / 60);
 
     await prisma.steamLibraryTitle.upsert({
-      where: { steamAppId: appId },
+      where: { userId_steamAppId: { userId, steamAppId: appId } },
       update: {
+        userId,
         title,
         platform: "Steam",
         coverUrl,
@@ -253,6 +254,7 @@ export async function syncSteamData() {
       },
       create: {
         steamAppId: appId,
+        userId,
         title,
         platform: "Steam",
         coverUrl,
@@ -262,7 +264,7 @@ export async function syncSteamData() {
     });
 
     const tracked = await prisma.game.findUnique({
-      where: { steamAppId: appId },
+      where: { userId_steamAppId: { userId, steamAppId: appId } },
       select: { id: true }
     });
 
@@ -272,7 +274,7 @@ export async function syncSteamData() {
     let earned: number | undefined;
     let total: number | undefined;
     try {
-      const snapshot = await fetchSteamAchievementSnapshot(appId);
+      const snapshot = await fetchSteamAchievementSnapshot(userId, appId);
       completion = snapshot.completion;
       earned = snapshot.earned;
       total = snapshot.total;
@@ -281,7 +283,7 @@ export async function syncSteamData() {
     }
 
     await prisma.game.update({
-      where: { steamAppId: appId },
+      where: { userId_steamAppId: { userId, steamAppId: appId } },
       data: {
         source: "STEAM",
         title,
@@ -305,6 +307,7 @@ export async function syncSteamData() {
 
 export async function getSteamLibraryTitles(): Promise<SteamTitleCandidate[]> {
   const rows = await prisma.steamLibraryTitle.findMany({
+    where: { userId: null },
     orderBy: [{ updatedAt: "desc" }, { title: "asc" }]
   });
 
@@ -338,12 +341,12 @@ export async function searchSteamCatalog(query: string): Promise<SteamTitleCandi
   }));
 }
 
-export async function getSteamAchievementsForApp(appId: number): Promise<{
+export async function getSteamAchievementsForApp(userId: string, appId: number): Promise<{
   achievements: SteamAchievementDetail[];
   earned: number;
   total: number;
 }> {
-  const { apiKey: key, steamId, enabled } = await getSteamConfig();
+  const { apiKey: key, steamId, enabled } = await getSteamConfig(userId);
   if (!enabled) {
     throw new Error("Missing STEAM_API_KEY or STEAM_STEAMID.");
   }
@@ -384,6 +387,7 @@ export async function getSteamAchievementsForApp(appId: number): Promise<{
 export async function syncCompletedSteamGamesToDone() {
   const rows = await prisma.game.findMany({
     where: {
+      userId: null,
       source: "STEAM",
       trophyCompletion: { gte: 100 },
       status: { not: GameStatus.DONE }
@@ -406,4 +410,49 @@ export async function syncCompletedSteamGamesToDone() {
     movedToDone: update.count,
     createdInDone: 0
   };
+}
+
+export async function syncCompletedSteamGamesToDoneForUser(userId: string) {
+  const rows = await prisma.game.findMany({
+    where: {
+      userId,
+      source: "STEAM",
+      trophyCompletion: { gte: 100 },
+      status: { not: GameStatus.DONE }
+    },
+    select: { id: true }
+  });
+
+  if (rows.length === 0) {
+    return { completedTitles: 0, movedToDone: 0, createdInDone: 0 };
+  }
+
+  const ids = rows.map((row) => row.id);
+  const update = await prisma.game.updateMany({
+    where: { id: { in: ids } },
+    data: { status: GameStatus.DONE }
+  });
+
+  return {
+    completedTitles: ids.length,
+    movedToDone: update.count,
+    createdInDone: 0
+  };
+}
+export async function getSteamLibraryTitlesForUser(userId: string): Promise<SteamTitleCandidate[]> {
+  const rows = await prisma.steamLibraryTitle.findMany({
+    where: { userId },
+    orderBy: [{ updatedAt: "desc" }, { title: "asc" }]
+  });
+
+  return rows.map((row) => ({
+    steamAppId: row.steamAppId,
+    title: row.title,
+    platform: row.platform ?? "Steam",
+    coverUrl: row.coverUrl ?? undefined,
+    trophyCompletion: row.trophyCompletion ?? undefined,
+    earnedTrophies: row.earnedTrophies ?? undefined,
+    totalTrophies: row.totalTrophies ?? undefined,
+    playtimeHours: row.playtimeHours ?? undefined
+  }));
 }

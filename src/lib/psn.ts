@@ -21,8 +21,8 @@ function normalizeSearchText(value: string): string {
     .trim();
 }
 
-async function getPsnConfig() {
-  const cfg = await getRuntimeConfig();
+async function getPsnConfig(userId: string) {
+  const cfg = await getRuntimeConfig(userId);
   return {
     npsso: cfg.PSN_NPSSO,
     accountId: cfg.PSN_ACCOUNT_ID || "me",
@@ -112,9 +112,9 @@ export type PsnTrophyDetail = {
   earnedDateTime?: string;
 };
 
-async function getPsnAuth() {
+async function getPsnAuthForUser(userId: string) {
   const { exchangeNpssoForAccessCode, exchangeAccessCodeForAuthTokens } = await import("psn-api");
-  const { npsso } = await getPsnConfig();
+  const { npsso } = await getPsnConfig(userId);
 
   if (!npsso) {
     throw new Error("Missing PSN_NPSSO");
@@ -124,15 +124,15 @@ async function getPsnAuth() {
   return exchangeAccessCodeForAuthTokens(accessCode);
 }
 
-async function fetchTrophiesFromPsn(): Promise<TrophySnapshot[]> {
-  const { npsso, accountId } = await getPsnConfig();
+async function fetchTrophiesFromPsn(userId: string): Promise<TrophySnapshot[]> {
+  const { npsso, accountId } = await getPsnConfig(userId);
   if (!npsso) {
     return [];
   }
 
   const { getUserTitles } = await import("psn-api");
 
-  const auth = await getPsnAuth();
+  const auth = await getPsnAuthForUser(userId);
   const userTitles = await getUserTitles(auth, accountId, { limit: 800 });
   const titles = userTitles?.trophyTitles ?? [];
 
@@ -173,16 +173,17 @@ async function fetchTrophiesFromPsn(): Promise<TrophySnapshot[]> {
   return snapshots;
 }
 
-export async function syncPsnData() {
-  const { npsso } = await getPsnConfig();
+export async function syncPsnData(userId: string) {
+  const { npsso } = await getPsnConfig(userId);
   if (!npsso) {
     return { enabled: false, syncedCount: 0, updatedTrackedCount: 0 };
   }
-  const snapshots = await fetchTrophiesFromPsn();
+  const snapshots = await fetchTrophiesFromPsn(userId);
   let updatedTrackedCount = 0;
   const trackedMissingPrice = await prisma.game.findMany({
     where: {
       psnTitleId: { not: null },
+      userId,
       OR: [{ currentPrice: null }, { lowestPrice30Days: null }, { psnStoreRating: null }]
     },
     select: {
@@ -210,8 +211,10 @@ export async function syncPsnData() {
 
   for (const entry of snapshots) {
     await prisma.psnLibraryTitle.upsert({
-      where: { psnTitleId: entry.titleId },
+      where: { userId_psnTitleId: { userId, psnTitleId: entry.titleId } },
+      // composite unique per user
       update: {
+        userId,
         title: entry.titleName,
         platform: entry.platform,
         coverUrl: entry.coverUrl,
@@ -222,6 +225,7 @@ export async function syncPsnData() {
       },
       create: {
         psnTitleId: entry.titleId,
+        userId,
         title: entry.titleName,
         platform: entry.platform,
         coverUrl: entry.coverUrl,
@@ -233,7 +237,7 @@ export async function syncPsnData() {
     });
 
     const updateResult = await prisma.game.updateMany({
-      where: { psnTitleId: entry.titleId },
+      where: { userId, psnTitleId: entry.titleId },
       data: {
         title: entry.titleName,
         platform: entry.platform,
@@ -247,16 +251,16 @@ export async function syncPsnData() {
     updatedTrackedCount += updateResult.count;
 
     if (updateResult.count > 0 && missingPriceIds.has(entry.titleId)) {
-      const candidates = await searchPsnCatalog(entry.titleName);
+      const candidates = await searchPsnCatalog(entry.titleName, userId);
       const bestMatch = pickBestCatalogMatch(candidates, entry.titleName, entry.titleId);
 
       if (bestMatch?.currentPrice || bestMatch?.lowestPrice30Days || bestMatch?.psnStoreRating != null) {
         const existing = await prisma.game.findUnique({
-          where: { psnTitleId: entry.titleId },
+          where: { userId_psnTitleId: { userId, psnTitleId: entry.titleId } },
           select: { currentPrice: true, lowestPrice30Days: true, psnStoreRating: true }
         });
         await prisma.game.updateMany({
-          where: { psnTitleId: entry.titleId },
+          where: { userId, psnTitleId: entry.titleId },
           data: {
             currentPrice: bestMatch.currentPrice ?? existing?.currentPrice ?? null,
             lowestPrice30Days: bestMatch.lowestPrice30Days ?? existing?.lowestPrice30Days ?? null,
@@ -272,6 +276,7 @@ export async function syncPsnData() {
   const wantTrackedPsn = await prisma.game.findMany({
     where: {
       source: "PLAYSTATION",
+      userId,
       status: GameStatus.WANT_TO_PLAY,
       psnTitleId: { not: null }
     },
@@ -289,7 +294,7 @@ export async function syncPsnData() {
     const shouldRefresh = !game.currentPrice || !game.lowestPrice30Days || game.psnStoreRating == null;
     if (!shouldRefresh) continue;
 
-    const candidates = await searchPsnCatalog(game.title);
+    const candidates = await searchPsnCatalog(game.title, userId);
     const bestMatch = pickBestCatalogMatch(candidates, game.title, game.psnTitleId ?? undefined);
     if (!bestMatch) continue;
 
@@ -316,9 +321,10 @@ export async function syncPsnData() {
   };
 }
 
-export async function debugTrackedPsnPriceSync(queryTitle?: string) {
+export async function debugTrackedPsnPriceSync(userId: string, queryTitle?: string) {
   const baseWhere = {
     source: "PLAYSTATION" as const,
+    userId,
     status: GameStatus.WANT_TO_PLAY,
     psnTitleId: { not: null as string | null }
   };
@@ -427,8 +433,9 @@ export async function debugTrackedPsnPriceSync(queryTitle?: string) {
   };
 }
 
-export async function getPsnLibraryTitles(): Promise<PsnTitleCandidate[]> {
+export async function getPsnLibraryTitles(userId: string): Promise<PsnTitleCandidate[]> {
   const rows = await prisma.psnLibraryTitle.findMany({
+    where: { userId },
     orderBy: [{ updatedAt: "desc" }, { title: "asc" }]
   });
 
@@ -443,9 +450,10 @@ export async function getPsnLibraryTitles(): Promise<PsnTitleCandidate[]> {
   }));
 }
 
-export async function syncCompletedPsnGamesToDone() {
+export async function syncCompletedPsnGamesToDone(userId: string) {
   const completedLibraryRows = await prisma.psnLibraryTitle.findMany({
     where: {
+      userId,
       trophyCompletion: {
         gte: 100
       }
@@ -475,6 +483,7 @@ export async function syncCompletedPsnGamesToDone() {
       psnTitleId: {
         in: completedIds
       },
+      userId,
       status: {
         not: GameStatus.DONE
       }
@@ -487,7 +496,7 @@ export async function syncCompletedPsnGamesToDone() {
   let createdInDone = 0;
   for (const row of completedLibraryRows) {
     const existing = await prisma.game.findUnique({
-      where: { psnTitleId: row.psnTitleId },
+      where: { userId_psnTitleId: { userId, psnTitleId: row.psnTitleId } },
       select: { id: true }
     });
     if (existing) continue;
@@ -495,6 +504,7 @@ export async function syncCompletedPsnGamesToDone() {
     await prisma.game.create({
       data: {
         psnTitleId: row.psnTitleId,
+        userId,
         title: row.title,
         platform: row.platform ?? null,
         coverUrl: row.coverUrl ?? null,
@@ -515,10 +525,11 @@ export async function syncCompletedPsnGamesToDone() {
 }
 
 export async function searchPsnCatalogWithDebug(
-  query: string
+  query: string,
+  userId?: string
 ): Promise<{ titles: PsnTitleCandidate[]; debug: PsnCatalogSearchDebug }> {
   const q = query.trim();
-  const { locale } = await getPsnConfig();
+  const locale = userId ? (await getPsnConfig(userId)).locale : ((process.env.PSN_STORE_LOCALE || "en-us").toLowerCase());
   const url = `https://store.playstation.com/${locale}/search/${encodeURIComponent(q)}`;
 
   const debug: PsnCatalogSearchDebug = {
@@ -1278,16 +1289,16 @@ export async function searchPsnCatalogWithDebug(
   return { titles: enriched, debug };
 }
 
-export async function searchPsnCatalog(query: string): Promise<PsnTitleCandidate[]> {
-  const result = await searchPsnCatalogWithDebug(query);
+export async function searchPsnCatalog(query: string, userId?: string): Promise<PsnTitleCandidate[]> {
+  const result = await searchPsnCatalogWithDebug(query, userId);
   if (result.debug.status && result.debug.status >= 400) {
     throw new Error(`Store search failed (${result.debug.status})`);
   }
   return result.titles;
 }
 
-export async function getPsnConnectionStatus(): Promise<PsnProfileStatus> {
-  const { npsso, accountId } = await getPsnConfig();
+export async function getPsnConnectionStatus(userId: string): Promise<PsnProfileStatus> {
+  const { npsso, accountId } = await getPsnConfig(userId);
   if (!npsso) {
     return {
       enabled: false,
@@ -1297,7 +1308,7 @@ export async function getPsnConnectionStatus(): Promise<PsnProfileStatus> {
 
   try {
     const { getProfileFromAccountId, getUserTitles } = await import("psn-api");
-    const auth = await getPsnAuth();
+    const auth = await getPsnAuthForUser(userId);
     const [profileResult, titlesResult] = await Promise.allSettled([
       getProfileFromAccountId(auth, accountId),
       getUserTitles(auth, accountId, { limit: 1 })
@@ -1327,7 +1338,7 @@ export async function getPsnConnectionStatus(): Promise<PsnProfileStatus> {
   }
 }
 
-export async function getPsnTrophiesForTitle(npCommunicationId: string): Promise<{
+export async function getPsnTrophiesForTitle(userId: string, npCommunicationId: string): Promise<{
   titleId: string;
   trophies: PsnTrophyDetail[];
   total: number;
@@ -1337,13 +1348,13 @@ export async function getPsnTrophiesForTitle(npCommunicationId: string): Promise
   if (!npCommunicationId?.trim()) {
     throw new Error("Missing title id");
   }
-  const { npsso, accountId } = await getPsnConfig();
+  const { npsso, accountId } = await getPsnConfig(userId);
   if (!npsso) {
     throw new Error("PSN is not configured");
   }
 
   const { getUserTrophiesEarnedForTitle, getTitleTrophies } = await import("psn-api");
-  const auth = await getPsnAuth();
+  const auth = await getPsnAuthForUser(userId);
   const titleId = npCommunicationId.trim();
 
   const tryService = async (service: "trophy2" | "trophy") => {

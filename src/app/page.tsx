@@ -111,6 +111,12 @@ type UiNotification = {
   readAt?: string | null;
 };
 
+type AuthUser = {
+  id: string;
+  email: string;
+  displayName: string;
+};
+
 type RuntimeSettings = {
   PSN_NPSSO: string;
   PSN_ACCOUNT_ID: string;
@@ -176,6 +182,14 @@ export default function HomePage() {
     PLAYING: false,
     DONE: false
   });
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<"LOGIN" | "REGISTER">("LOGIN");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authDisplayName, setAuthDisplayName] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [settings, setSettings] = useState<RuntimeSettings>({
     PSN_NPSSO: "",
     PSN_ACCOUNT_ID: "me",
@@ -242,6 +256,64 @@ export default function HomePage() {
     const data = (await res.json()) as { values?: RuntimeSettings };
     if (!data.values) return;
     setSettings(data.values);
+  }
+
+  async function fetchAuthMe() {
+    const res = await fetch("/api/auth/me", { cache: "no-store" });
+    if (!res.ok) {
+      setAuthUser(null);
+      return null;
+    }
+    const data = (await res.json()) as { user?: AuthUser };
+    const user = data.user || null;
+    setAuthUser(user);
+    return user;
+  }
+
+  async function bootstrapData() {
+    await fetchGames();
+    await fetchPsnStatus();
+    await fetchSteamStatus();
+    await fetchLibrary();
+    await fetchSteamLibrary();
+    await fetchNintendoLibrary();
+    await fetchNotifications();
+    await fetchSettings();
+    await syncPsn();
+  }
+
+  async function submitAuth() {
+    setAuthSubmitting(true);
+    setAuthMessage("");
+    const endpoint = authMode === "LOGIN" ? "/api/auth/login" : "/api/auth/register";
+    const payload =
+      authMode === "LOGIN"
+        ? { email: authEmail, password: authPassword }
+        : { email: authEmail, password: authPassword, displayName: authDisplayName };
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setAuthMessage(data.error || "Authentication failed.");
+      setAuthSubmitting(false);
+      return;
+    }
+    await fetchAuthMe();
+    setAuthMessage("");
+    await bootstrapData();
+    setAuthSubmitting(false);
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setAuthUser(null);
+    setGames([]);
+    setSyncMessage("");
+    setNotifications([]);
+    setUnreadNotifications(0);
   }
 
   async function saveSettings() {
@@ -321,15 +393,13 @@ export default function HomePage() {
 
   useEffect(() => {
     const init = async () => {
-      await fetchGames();
-      await fetchPsnStatus();
-      await fetchSteamStatus();
-      await fetchLibrary();
-      await fetchSteamLibrary();
-      await fetchNintendoLibrary();
-      await fetchNotifications();
-      await fetchSettings();
-      await syncPsn();
+      const user = await fetchAuthMe();
+      if (user) {
+        await bootstrapData();
+      } else {
+        setLoading(false);
+      }
+      setAuthLoading(false);
     };
     void init();
   }, []);
@@ -666,6 +736,38 @@ export default function HomePage() {
     toolPlatform === "PLAYSTATION" ? "PSN" : toolPlatform === "STEAM" ? "Steam" : "Nintendo";
   const isSyncingNow = syncing || syncingCompleted;
 
+  if (authLoading) {
+    return <main className="mx-auto max-w-[740px] px-4 py-8 text-sm text-muted">Loading...</main>;
+  }
+
+  if (!authUser) {
+    return (
+      <main className="mx-auto max-w-[520px] px-4 py-10">
+        <section className="rounded-[6px] bg-white p-6 ring-1 ring-black/5">
+          <h1 className="text-2xl font-semibold text-ink">Playstack Account</h1>
+          <p className="mt-1 text-sm text-muted">Sign in or create an account to use your own data and settings.</p>
+          <div className="mt-4 inline-flex rounded-[6px] border border-[#d9dee7] bg-[#f8fafc] p-0.5">
+            <button type="button" onClick={() => setAuthMode("LOGIN")} className={`rounded-[6px] px-3 py-1.5 text-xs font-semibold ${authMode === "LOGIN" ? "bg-white text-ink shadow-sm" : "text-muted"}`}>Login</button>
+            <button type="button" onClick={() => setAuthMode("REGISTER")} className={`rounded-[6px] px-3 py-1.5 text-xs font-semibold ${authMode === "REGISTER" ? "bg-white text-ink shadow-sm" : "text-muted"}`}>Register</button>
+          </div>
+          <div className="mt-4 grid gap-3">
+            {authMode === "REGISTER" ? (
+              <input value={authDisplayName} onChange={(e) => setAuthDisplayName(e.target.value)} placeholder="Display name" className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+            ) : null}
+            <input value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email" className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+            <input type="password" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} placeholder="Password" className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+          </div>
+          <div className="mt-4 flex items-center gap-3">
+            <button type="button" onClick={() => void submitAuth()} disabled={authSubmitting} className="rounded-[6px] bg-ink px-3 py-2 text-sm font-semibold text-white hover:bg-[#1f2b2f] disabled:opacity-70">
+              {authSubmitting ? "Please wait..." : authMode === "LOGIN" ? "Login" : "Create account"}
+            </button>
+            <p className="text-xs text-[#b42318]">{authMessage}</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto max-w-[1480px] px-4 py-6">
       <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -754,6 +856,13 @@ export default function HomePage() {
               {isSyncingNow ? "Syncing..." : "Idle"}
             </span>
           </div>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            className="mt-3 rounded-[6px] border border-[#f2d2cf] px-2 py-1 text-[11px] font-semibold text-[#b42318] hover:bg-[#fff6f5]"
+          >
+            Logout
+          </button>
         </aside>
 
         <section className="space-y-4">
@@ -878,6 +987,13 @@ export default function HomePage() {
                           className="mt-2 inline-flex w-full items-center justify-center rounded-[6px] border border-[#d9dee7] px-3 py-2 text-sm font-semibold text-ink transition hover:bg-[#f6f8fc] disabled:cursor-not-allowed disabled:opacity-70"
                         >
                           {syncingCompleted ? "Syncing platinum..." : "Sync platinum games to Done"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void logout()}
+                          className="mt-2 inline-flex w-full items-center justify-center rounded-[6px] border border-[#f2d2cf] px-3 py-2 text-sm font-semibold text-[#b42318] transition hover:bg-[#fff6f5]"
+                        >
+                          Logout
                         </button>
                       </div>
                     ) : null}

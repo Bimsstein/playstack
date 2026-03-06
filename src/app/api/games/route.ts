@@ -2,6 +2,7 @@ import { GameSource, GameStatus } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { getUserFromRequest } from "@/lib/auth";
 import { fetchStoryPlusHoursFromHltb } from "@/lib/hltb";
 import {
   evaluateWantPriceAlerts,
@@ -45,12 +46,19 @@ const updateSchema = z.object({
   rating: z.number().int().min(1).max(10).optional().nullable()
 });
 
-export async function GET() {
-  const games = await prisma.game.findMany({ orderBy: [{ status: "asc" }, { updatedAt: "desc" }] });
+export async function GET(request: NextRequest) {
+  const user = await getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const games = await prisma.game.findMany({
+    where: { userId: user.id },
+    orderBy: [{ status: "asc" }, { updatedAt: "desc" }]
+  });
   return NextResponse.json(games);
 }
 
 export async function POST(request: NextRequest) {
+  const user = await getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const payload = await request.json();
   const parsed = gameSchema.safeParse(payload);
 
@@ -69,14 +77,16 @@ export async function POST(request: NextRequest) {
   }
   const game = psnTitleId
     ? await prisma.game.upsert({
-        where: { psnTitleId },
+        where: { userId_psnTitleId: { userId: user.id, psnTitleId } },
         update: {
+          userId: user.id,
           ...data,
           storyPlusHours: resolvedStoryPlusHours,
           source: source ?? GameSource.PLAYSTATION,
           psnTitleId
         },
         create: {
+          userId: user.id,
           ...data,
           storyPlusHours: resolvedStoryPlusHours,
           source: source ?? GameSource.PLAYSTATION,
@@ -85,14 +95,16 @@ export async function POST(request: NextRequest) {
       })
     : steamAppId
       ? await prisma.game.upsert({
-          where: { steamAppId },
+          where: { userId_steamAppId: { userId: user.id, steamAppId } },
           update: {
+            userId: user.id,
             ...data,
             storyPlusHours: resolvedStoryPlusHours,
             source: source ?? GameSource.STEAM,
             steamAppId
           },
           create: {
+            userId: user.id,
             ...data,
             storyPlusHours: resolvedStoryPlusHours,
             source: source ?? GameSource.STEAM,
@@ -101,14 +113,16 @@ export async function POST(request: NextRequest) {
         })
       : nintendoGameId
         ? await prisma.game.upsert({
-            where: { nintendoGameId },
+            where: { userId_nintendoGameId: { userId: user.id, nintendoGameId } },
             update: {
+              userId: user.id,
               ...data,
               storyPlusHours: resolvedStoryPlusHours,
               source: source ?? GameSource.NINTENDO,
               nintendoGameId
             },
             create: {
+              userId: user.id,
               ...data,
               storyPlusHours: resolvedStoryPlusHours,
               source: source ?? GameSource.NINTENDO,
@@ -117,17 +131,20 @@ export async function POST(request: NextRequest) {
           })
         : await prisma.game.create({
             data: {
+              userId: user.id,
               ...data,
               storyPlusHours: resolvedStoryPlusHours
             }
           });
-  await syncLowestPriceHistoryForGame(game.id);
-  await syncWantBaselineForGame(game.id);
-  await evaluateWantPriceAlerts();
+  await syncLowestPriceHistoryForGame(user.id, game.id);
+  await syncWantBaselineForGame(user.id, game.id);
+  await evaluateWantPriceAlerts(user.id);
   return NextResponse.json(game, { status: 201 });
 }
 
 export async function PATCH(request: NextRequest) {
+  const user = await getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const payload = await request.json();
   const parsed = updateSchema.safeParse(payload);
 
@@ -144,28 +161,39 @@ export async function PATCH(request: NextRequest) {
       // keep unchanged if fetch fails
     }
   }
-  const game = await prisma.game.update({
-    where: { id },
+  const updateResult = await prisma.game.updateMany({
+    where: { id, userId: user.id },
     data: {
       ...data,
       ...(title !== undefined ? { title } : {}),
       ...(resolvedStoryPlusHours !== undefined ? { storyPlusHours: resolvedStoryPlusHours } : {})
     }
   });
-  await syncLowestPriceHistoryForGame(game.id);
-  await syncWantBaselineForGame(game.id);
-  await evaluateWantPriceAlerts();
+  if (updateResult.count === 0) {
+    return NextResponse.json({ error: "Game not found" }, { status: 404 });
+  }
+  const game = await prisma.game.findFirst({
+    where: { id, userId: user.id }
+  });
+  if (!game) {
+    return NextResponse.json({ error: "Game not found" }, { status: 404 });
+  }
+  await syncLowestPriceHistoryForGame(user.id, game.id);
+  await syncWantBaselineForGame(user.id, game.id);
+  await evaluateWantPriceAlerts(user.id);
 
   return NextResponse.json(game);
 }
 
 export async function DELETE(request: NextRequest) {
+  const user = await getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const id = request.nextUrl.searchParams.get("id");
 
   if (!id) {
     return NextResponse.json({ error: "Missing id" }, { status: 400 });
   }
 
-  await prisma.game.delete({ where: { id } });
+  await prisma.game.deleteMany({ where: { id, userId: user.id } });
   return NextResponse.json({ ok: true });
 }

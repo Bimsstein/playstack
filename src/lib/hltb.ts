@@ -354,16 +354,16 @@ async function fetchStoryPlusHoursFromHltbDetailed(title: string): Promise<HltbL
   };
 }
 
-export async function backfillStoryPlusHours(limit = 20) {
-  const totalTrackedGames = await prisma.game.count();
+export async function backfillStoryPlusHours(userId: string, limit = 20) {
+  const totalTrackedGames = await prisma.game.count({ where: { userId } });
   const missingEstimateCount = await prisma.game.count({
-    where: { storyPlusHours: null }
+    where: { userId, storyPlusHours: null }
   });
   const suspiciousEstimateCount = await prisma.game.count({
-    where: { storyPlusHours: { gt: 300 } }
+    where: { userId, storyPlusHours: { gt: 300 } }
   });
   const rows = await prisma.game.findMany({
-    where: {},
+    where: { userId },
     select: { id: true, title: true, storyPlusHours: true },
     take: limit,
     orderBy: { updatedAt: "desc" }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getUserFromRequest } from "@/lib/auth";
 import { getRuntimeConfig } from "@/lib/runtime-config";
 
 function decodeEscapes(value: string) {
@@ -12,12 +13,14 @@ function decodeEscapes(value: string) {
 }
 
 export async function GET(request: NextRequest) {
+  const user = await getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const titleId = request.nextUrl.searchParams.get("titleId")?.trim();
   if (!titleId) {
     return NextResponse.json({ error: "Missing titleId" }, { status: 400 });
   }
 
-  const cfg = await getRuntimeConfig();
+  const cfg = await getRuntimeConfig(user.id);
   const locale = (cfg.PSN_STORE_LOCALE || "en-us").toLowerCase();
   const url = `https://store.playstation.com/${locale}/product/${encodeURIComponent(titleId)}`;
 

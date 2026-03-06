@@ -1,21 +1,24 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+import { getUserFromRequest } from "@/lib/auth";
 import { backfillStoryPlusHours } from "@/lib/hltb";
 import { syncNintendoData } from "@/lib/nintendo";
 import { evaluateWantPriceAlerts, syncLowestPriceHistoryForAllGames } from "@/lib/price-alerts";
 import { syncPsnData } from "@/lib/psn";
 import { syncSteamData } from "@/lib/steam";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const user = await getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const [psn, steam, nintendo, hltb] = await Promise.all([
-      syncPsnData(),
-      syncSteamData(),
-      syncNintendoData(),
-      backfillStoryPlusHours(25)
+      syncPsnData(user.id),
+      syncSteamData(user.id),
+      syncNintendoData(user.id),
+      backfillStoryPlusHours(user.id, 25)
     ]);
-    await syncLowestPriceHistoryForAllGames();
-    await evaluateWantPriceAlerts();
+    await syncLowestPriceHistoryForAllGames(user.id);
+    await evaluateWantPriceAlerts(user.id);
     return NextResponse.json({
       enabled: psn.enabled || steam.enabled || nintendo.enabled,
       psn,
