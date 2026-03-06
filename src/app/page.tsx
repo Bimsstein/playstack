@@ -9,7 +9,7 @@ import { statusMeta, type StatusFilter } from "@/lib/types";
 const statuses: StatusFilter[] = ["WANT_TO_PLAY", "PLAYING", "DONE"];
 type FrontFilterStatus = "ALL" | StatusFilter;
 type TrophyFilter = "ALL" | "WITH_TROPHIES" | "NO_TROPHIES";
-type AppView = "LIBRARY" | "STORE" | "OVERVIEW";
+type AppView = "LIBRARY" | "STORE" | "OVERVIEW" | "SETTINGS";
 type ToolPlatform = "PLAYSTATION" | "STEAM" | "NINTENDO";
 
 type PsnStatus = {
@@ -111,6 +111,15 @@ type UiNotification = {
   readAt?: string | null;
 };
 
+type RuntimeSettings = {
+  PSN_NPSSO: string;
+  PSN_ACCOUNT_ID: string;
+  PSN_STORE_LOCALE: string;
+  STEAM_API_KEY: string;
+  STEAM_STEAMID: string;
+  RAWG_API_KEY: string;
+};
+
 function formatNintendoPrice(value?: string) {
   if (!value) return value;
   const cleaned = value.trim();
@@ -167,6 +176,16 @@ export default function HomePage() {
     PLAYING: false,
     DONE: false
   });
+  const [settings, setSettings] = useState<RuntimeSettings>({
+    PSN_NPSSO: "",
+    PSN_ACCOUNT_ID: "me",
+    PSN_STORE_LOCALE: "en-us",
+    STEAM_API_KEY: "",
+    STEAM_STEAMID: "",
+    RAWG_API_KEY: ""
+  });
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState("");
 
   async function fetchGames() {
     const res = await fetch("/api/games", { cache: "no-store" });
@@ -216,6 +235,34 @@ export default function HomePage() {
     const data = (await res.json()) as { unreadCount?: number; notifications?: UiNotification[] };
     setUnreadNotifications(data.unreadCount ?? 0);
     setNotifications(data.notifications ?? []);
+  }
+
+  async function fetchSettings() {
+    const res = await fetch("/api/settings", { cache: "no-store" });
+    const data = (await res.json()) as { values?: RuntimeSettings };
+    if (!data.values) return;
+    setSettings(data.values);
+  }
+
+  async function saveSettings() {
+    setSettingsSaving(true);
+    setSettingsMessage("");
+    const res = await fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values: settings })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setSettingsMessage(data.error ? "Failed to save settings." : "Failed to save settings.");
+      setSettingsSaving(false);
+      return;
+    }
+    setSettings(data.values ?? settings);
+    setSettingsMessage("Settings saved.");
+    await fetchPsnStatus();
+    await fetchSteamStatus();
+    setSettingsSaving(false);
   }
 
   async function markNotificationsRead() {
@@ -281,6 +328,7 @@ export default function HomePage() {
       await fetchSteamLibrary();
       await fetchNintendoLibrary();
       await fetchNotifications();
+      await fetchSettings();
       await syncPsn();
     };
     void init();
@@ -675,7 +723,8 @@ export default function HomePage() {
             {([
               ["OVERVIEW", "Overview"],
               ["LIBRARY", "My Library"],
-              ["STORE", "Store search"]
+              ["STORE", "Store search"],
+              ["SETTINGS", "Settings"]
             ] as Array<[AppView, string]>).map(([value, label]) => (
               <button
                 key={value}
@@ -717,7 +766,9 @@ export default function HomePage() {
                     ? "My Library"
                     : activeView === "STORE"
                       ? "Store search"
-                      : "Overview"}
+                      : activeView === "SETTINGS"
+                        ? "Settings"
+                        : "Overview"}
                 </p>
                 <div className="mt-2 inline-flex rounded-[6px] border border-[#d9dee7] bg-[#f8fafc] p-0.5">
                   <button
@@ -836,19 +887,65 @@ export default function HomePage() {
             </div>
           </header>
 
-          {toolPlatform === "STEAM" && steamStatus && !steamStatus.enabled ? (
+          {toolPlatform === "STEAM" && steamStatus && !steamStatus.enabled && activeView !== "SETTINGS" ? (
             <section className="rounded-[6px] border border-[#f0dfb4] bg-[#fffbf2] p-4 ring-1 ring-[#f5e8c8]">
               <p className="text-sm font-semibold text-ink">Steam Setup Required</p>
               <p className="mt-1 text-xs text-muted">
-                Add these variables to <code>.env.local</code>, then restart the dev server:
+                Configure Steam credentials in the Settings page.
               </p>
-              <pre className="mt-2 whitespace-pre-wrap rounded-[6px] border border-[#eddcb0] bg-white p-2 text-xs text-[#334247]">
-{`STEAM_API_KEY="your_steam_web_api_key"
-STEAM_STEAMID="your_steamid64"`}
-              </pre>
+              <button
+                type="button"
+                onClick={() => setActiveView("SETTINGS")}
+                className="mt-2 rounded-[6px] border border-[#d9dee7] bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-[#f6f8fc]"
+              >
+                Open Settings
+              </button>
               <p className="mt-2 text-xs text-muted">
                 Keep your Steam profile public so library and achievements can sync.
               </p>
+            </section>
+          ) : null}
+
+          {activeView === "SETTINGS" ? (
+            <section className="rounded-[6px] bg-white p-5 ring-1 ring-black/5">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-muted">PSN NPSSO</span>
+                  <input type="password" value={settings.PSN_NPSSO} onChange={(e) => setSettings((prev) => ({ ...prev, PSN_NPSSO: e.target.value }))} className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+                </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-muted">PSN Account ID</span>
+                  <input value={settings.PSN_ACCOUNT_ID} onChange={(e) => setSettings((prev) => ({ ...prev, PSN_ACCOUNT_ID: e.target.value }))} className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+                </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-muted">PSN Store Locale</span>
+                  <input value={settings.PSN_STORE_LOCALE} onChange={(e) => setSettings((prev) => ({ ...prev, PSN_STORE_LOCALE: e.target.value }))} placeholder="en-us / de-de" className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+                </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-muted">Steam API Key</span>
+                  <input type="password" value={settings.STEAM_API_KEY} onChange={(e) => setSettings((prev) => ({ ...prev, STEAM_API_KEY: e.target.value }))} className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+                </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-muted">Steam ID64</span>
+                  <input value={settings.STEAM_STEAMID} onChange={(e) => setSettings((prev) => ({ ...prev, STEAM_STEAMID: e.target.value }))} className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+                </label>
+                <label className="text-sm">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-muted">RAWG API Key</span>
+                  <input type="password" value={settings.RAWG_API_KEY} onChange={(e) => setSettings((prev) => ({ ...prev, RAWG_API_KEY: e.target.value }))} className="w-full rounded-[6px] border border-[#e6e9ef] bg-[#fafbfc] px-3 py-2 outline-none focus:border-accent" />
+                </label>
+              </div>
+              <div className="mt-4 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void saveSettings()}
+                  disabled={settingsSaving}
+                  className="rounded-[6px] bg-ink px-3 py-2 text-sm font-semibold text-white hover:bg-[#1f2b2f] disabled:opacity-70"
+                >
+                  {settingsSaving ? "Saving..." : "Save Settings"}
+                </button>
+                <p className="text-xs text-muted">{settingsMessage}</p>
+              </div>
+              <p className="mt-3 text-xs text-muted">These settings are stored in your app database and can be edited online after deploying to Vercel.</p>
             </section>
           ) : null}
 

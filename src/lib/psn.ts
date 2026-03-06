@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { GameStatus } from "@prisma/client";
+import { getRuntimeConfig } from "@/lib/runtime-config";
 
 type TrophySnapshot = {
   titleId: string;
@@ -20,8 +21,14 @@ function normalizeSearchText(value: string): string {
     .trim();
 }
 
-const hasPsnConfig = () => Boolean(process.env.PSN_NPSSO);
-const getResolvedAccountId = () => process.env.PSN_ACCOUNT_ID || "me";
+async function getPsnConfig() {
+  const cfg = await getRuntimeConfig();
+  return {
+    npsso: cfg.PSN_NPSSO,
+    accountId: cfg.PSN_ACCOUNT_ID || "me",
+    locale: (cfg.PSN_STORE_LOCALE || "en-us").toLowerCase()
+  };
+}
 
 type PsnProfileStatus = {
   enabled: boolean;
@@ -107,7 +114,7 @@ export type PsnTrophyDetail = {
 
 async function getPsnAuth() {
   const { exchangeNpssoForAccessCode, exchangeAccessCodeForAuthTokens } = await import("psn-api");
-  const npsso = process.env.PSN_NPSSO;
+  const { npsso } = await getPsnConfig();
 
   if (!npsso) {
     throw new Error("Missing PSN_NPSSO");
@@ -118,13 +125,12 @@ async function getPsnAuth() {
 }
 
 async function fetchTrophiesFromPsn(): Promise<TrophySnapshot[]> {
-  if (!hasPsnConfig()) {
+  const { npsso, accountId } = await getPsnConfig();
+  if (!npsso) {
     return [];
   }
 
   const { getUserTitles } = await import("psn-api");
-
-  const accountId = getResolvedAccountId();
 
   const auth = await getPsnAuth();
   const userTitles = await getUserTitles(auth, accountId, { limit: 800 });
@@ -168,6 +174,10 @@ async function fetchTrophiesFromPsn(): Promise<TrophySnapshot[]> {
 }
 
 export async function syncPsnData() {
+  const { npsso } = await getPsnConfig();
+  if (!npsso) {
+    return { enabled: false, syncedCount: 0, updatedTrackedCount: 0 };
+  }
   const snapshots = await fetchTrophiesFromPsn();
   let updatedTrackedCount = 0;
   const trackedMissingPrice = await prisma.game.findMany({
@@ -302,7 +312,7 @@ export async function syncPsnData() {
   return {
     syncedCount: snapshots.length,
     updatedTrackedCount,
-    enabled: hasPsnConfig()
+    enabled: true
   };
 }
 
@@ -508,7 +518,7 @@ export async function searchPsnCatalogWithDebug(
   query: string
 ): Promise<{ titles: PsnTitleCandidate[]; debug: PsnCatalogSearchDebug }> {
   const q = query.trim();
-  const locale = (process.env.PSN_STORE_LOCALE || "en-us").toLowerCase();
+  const { locale } = await getPsnConfig();
   const url = `https://store.playstation.com/${locale}/search/${encodeURIComponent(q)}`;
 
   const debug: PsnCatalogSearchDebug = {
@@ -1277,7 +1287,8 @@ export async function searchPsnCatalog(query: string): Promise<PsnTitleCandidate
 }
 
 export async function getPsnConnectionStatus(): Promise<PsnProfileStatus> {
-  if (!hasPsnConfig()) {
+  const { npsso, accountId } = await getPsnConfig();
+  if (!npsso) {
     return {
       enabled: false,
       connected: false
@@ -1286,7 +1297,6 @@ export async function getPsnConnectionStatus(): Promise<PsnProfileStatus> {
 
   try {
     const { getProfileFromAccountId, getUserTitles } = await import("psn-api");
-    const accountId = getResolvedAccountId();
     const auth = await getPsnAuth();
     const [profileResult, titlesResult] = await Promise.allSettled([
       getProfileFromAccountId(auth, accountId),
@@ -1327,13 +1337,13 @@ export async function getPsnTrophiesForTitle(npCommunicationId: string): Promise
   if (!npCommunicationId?.trim()) {
     throw new Error("Missing title id");
   }
-  if (!hasPsnConfig()) {
+  const { npsso, accountId } = await getPsnConfig();
+  if (!npsso) {
     throw new Error("PSN is not configured");
   }
 
   const { getUserTrophiesEarnedForTitle, getTitleTrophies } = await import("psn-api");
   const auth = await getPsnAuth();
-  const accountId = getResolvedAccountId();
   const titleId = npCommunicationId.trim();
 
   const tryService = async (service: "trophy2" | "trophy") => {

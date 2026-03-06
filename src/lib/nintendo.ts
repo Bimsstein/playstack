@@ -1,8 +1,12 @@
 import { GameStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { getRuntimeConfig } from "@/lib/runtime-config";
 
-const getRawgApiKey = () => process.env.RAWG_API_KEY || "";
+const getRawgApiKey = async () => {
+  const cfg = await getRuntimeConfig();
+  return cfg.RAWG_API_KEY || "";
+};
 
 export type NintendoTitleCandidate = {
   nintendoGameId: string;
@@ -153,7 +157,7 @@ export async function searchNintendoLegacyCatalog(query: string): Promise<Ninten
   const q = query.trim();
   if (!q) return [];
 
-  const key = getRawgApiKey();
+  const key = await getRawgApiKey();
   if (!key) return [];
 
   const url = `https://api.rawg.io/api/games?key=${encodeURIComponent(key)}&search=${encodeURIComponent(

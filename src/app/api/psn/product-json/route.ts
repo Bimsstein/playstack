@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getRuntimeConfig } from "@/lib/runtime-config";
 
 function decodeEscapes(value: string) {
   return value
@@ -16,7 +17,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Missing titleId" }, { status: 400 });
   }
 
-  const locale = (process.env.PSN_STORE_LOCALE || "en-us").toLowerCase();
+  const cfg = await getRuntimeConfig();
+  const locale = (cfg.PSN_STORE_LOCALE || "en-us").toLowerCase();
   const url = `https://store.playstation.com/${locale}/product/${encodeURIComponent(titleId)}`;
 
   try {
@@ -88,4 +90,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-

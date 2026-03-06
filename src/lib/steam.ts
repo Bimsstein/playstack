@@ -1,10 +1,16 @@
 import { GameStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { getRuntimeConfig } from "@/lib/runtime-config";
 
-const hasSteamConfig = () => Boolean(process.env.STEAM_API_KEY && process.env.STEAM_STEAMID);
-const getSteamApiKey = () => process.env.STEAM_API_KEY || "";
-const getSteamId = () => process.env.STEAM_STEAMID || "";
+async function getSteamConfig() {
+  const cfg = await getRuntimeConfig();
+  return {
+    apiKey: cfg.STEAM_API_KEY,
+    steamId: cfg.STEAM_STEAMID,
+    enabled: Boolean(cfg.STEAM_API_KEY && cfg.STEAM_STEAMID)
+  };
+}
 
 type SteamProfileStatus = {
   enabled: boolean;
@@ -161,8 +167,7 @@ async function fetchSteamAchievementSnapshot(appId: number): Promise<{
   earned?: number;
   total?: number;
 }> {
-  const key = getSteamApiKey();
-  const steamId = getSteamId();
+  const { apiKey: key, steamId } = await getSteamConfig();
   const achievementsUrl = `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key=${encodeURIComponent(
     key
   )}&steamid=${encodeURIComponent(steamId)}&appid=${appId}&l=english`;
@@ -179,13 +184,12 @@ async function fetchSteamAchievementSnapshot(appId: number): Promise<{
 }
 
 export async function getSteamConnectionStatus(): Promise<SteamProfileStatus> {
-  if (!hasSteamConfig()) {
+  const { apiKey: key, steamId, enabled } = await getSteamConfig();
+  if (!enabled) {
     return { enabled: false, connected: false, error: "Missing STEAM_API_KEY or STEAM_STEAMID." };
   }
 
   try {
-    const key = getSteamApiKey();
-    const steamId = getSteamId();
     const profileUrl = `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${encodeURIComponent(
       key
     )}&steamids=${encodeURIComponent(steamId)}`;
@@ -221,12 +225,10 @@ export async function getSteamConnectionStatus(): Promise<SteamProfileStatus> {
 }
 
 export async function syncSteamData() {
-  if (!hasSteamConfig()) {
+  const { apiKey: key, steamId, enabled } = await getSteamConfig();
+  if (!enabled) {
     return { enabled: false, syncedCount: 0, updatedTrackedCount: 0 };
   }
-
-  const key = getSteamApiKey();
-  const steamId = getSteamId();
   const ownedGamesUrl = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${encodeURIComponent(
     key
   )}&steamid=${encodeURIComponent(steamId)}&include_appinfo=true&include_played_free_games=true`;
@@ -341,12 +343,10 @@ export async function getSteamAchievementsForApp(appId: number): Promise<{
   earned: number;
   total: number;
 }> {
-  if (!hasSteamConfig()) {
+  const { apiKey: key, steamId, enabled } = await getSteamConfig();
+  if (!enabled) {
     throw new Error("Missing STEAM_API_KEY or STEAM_STEAMID.");
   }
-
-  const key = getSteamApiKey();
-  const steamId = getSteamId();
   const achievementsUrl = `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key=${encodeURIComponent(
     key
   )}&steamid=${encodeURIComponent(steamId)}&appid=${appId}&l=english`;
