@@ -22,19 +22,23 @@ const DEFAULTS: RuntimeConfig = {
 };
 
 export async function getRuntimeConfig(userId?: string): Promise<RuntimeConfig> {
-  const scopedKeys = userId ? APP_SETTING_KEYS.map((k) => `${userId}:${k}`) : [];
-  const keysToRead = [...APP_SETTING_KEYS, ...scopedKeys];
+  const scopedKeys = userId ? APP_SETTING_KEYS.map((k) => `${userId}:${k}`) : [...APP_SETTING_KEYS];
+  const keysToRead = [...scopedKeys];
   const rows = await prisma.appSetting.findMany({
     where: { key: { in: keysToRead } }
   });
   const dbMap = new Map(rows.map((row) => [row.key, row.value]));
 
   const read = (key: AppSettingKey) => {
-    const scopedKey = userId ? `${userId}:${key}` : "";
-    const dbVal = (scopedKey ? dbMap.get(scopedKey) : undefined)?.trim() || dbMap.get(key)?.trim();
+    const dbKey = userId ? `${userId}:${key}` : key;
+    const dbVal = dbMap.get(dbKey)?.trim();
     if (dbVal) return dbVal;
-    const envVal = process.env[key]?.trim();
-    if (envVal) return envVal;
+    // Authenticated users must never inherit global/env secrets.
+    // Unauthenticated/system reads (no userId) can still use env fallback.
+    if (!userId) {
+      const envVal = process.env[key]?.trim();
+      if (envVal) return envVal;
+    }
     return DEFAULTS[key];
   };
 
